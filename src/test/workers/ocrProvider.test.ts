@@ -15,8 +15,8 @@ const globalScope = globalThis as typeof globalThis & {
 
 afterEach(() => {
   vi.restoreAllMocks()
-  delete globalScope.TextDetector
-  delete globalScope.createImageBitmap
+  globalScope.TextDetector = undefined
+  globalScope.createImageBitmap = undefined
 })
 
 describe('ocrProvider', () => {
