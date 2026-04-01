@@ -2,7 +2,7 @@ import { workerContractVersion, type WorkerRequest, type WorkerResponse } from '
 import { deduplicateFrameBatch, toScoreRecord, type FrameCandidate } from '@/shared/domain/deduplication'
 import { cleanOcrText, normalizePlayerName, normalizeScoreText } from '@/shared/domain/normalization'
 import { toWorkerAssetUrl } from '@/shared/workers/assetPaths'
-import { createLazyOcrProvider, createStubOcrProvider, type OcrProvider } from '@/shared/workers/ocrProvider'
+import { createDefaultOcrProvider, createLazyOcrProvider, type OcrProvider } from '@/shared/workers/ocrProvider'
 import {
   createDefaultVideoFrameExtractor,
   type VideoDescriptor,
@@ -26,7 +26,7 @@ export interface OcrWorkerDeps {
 
 const defaultDeps: OcrWorkerDeps = {
   extractor: createDefaultVideoFrameExtractor(),
-  ocr: createLazyOcrProvider(async () => createStubOcrProvider()),
+  ocr: createLazyOcrProvider(async () => createDefaultOcrProvider()),
   origin: typeof location !== 'undefined' ? location.origin : 'http://localhost',
 }
 
