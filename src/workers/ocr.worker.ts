@@ -4,7 +4,7 @@ import { cleanOcrText, normalizePlayerName, normalizeScoreText } from '@/shared/
 import { toWorkerAssetUrl } from '@/shared/workers/assetPaths'
 import { createLazyOcrProvider, createStubOcrProvider, type OcrProvider } from '@/shared/workers/ocrProvider'
 import {
-  createInMemoryVideoFrameExtractor,
+  createDefaultVideoFrameExtractor,
   type VideoDescriptor,
   type VideoFrameExtractor,
 } from '@/shared/workers/videoFrameExtractor'
@@ -25,7 +25,7 @@ export interface OcrWorkerDeps {
 }
 
 const defaultDeps: OcrWorkerDeps = {
-  extractor: createInMemoryVideoFrameExtractor(),
+  extractor: createDefaultVideoFrameExtractor(),
   ocr: createLazyOcrProvider(async () => createStubOcrProvider()),
   origin: typeof location !== 'undefined' ? location.origin : 'http://localhost',
 }
