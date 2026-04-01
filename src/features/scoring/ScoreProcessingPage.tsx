@@ -6,6 +6,11 @@ import type { MimicColor, SourceVideo } from '@/shared/contracts/types'
 import { MOCK_SOURCE_VIDEOS } from '@/shared/mocks'
 import { registerSourceVideoFile, getRegisteredSourceVideoAsset } from '@/shared/runtime/sourceVideoRegistry'
 import {
+  createDefaultOcrProvider,
+  isNativeTextDetectorAvailable,
+  type OcrProvider,
+} from '@/shared/workers/ocrProvider'
+import {
   createVideoExtractMessageHandler,
   type VideoExtractResponse,
 } from '@/workers/video-extract.worker'
@@ -23,6 +28,19 @@ interface VideoDescriptorState {
   durationMs: number
   width: number
   height: number
+}
+
+type OcrPreviewStatus = 'idle' | 'running' | 'complete' | 'error'
+
+interface OcrPreviewFrameResult {
+  timestampMs: number
+  lines: string[]
+}
+
+interface OcrPreviewState {
+  status: OcrPreviewStatus
+  message: string
+  results: OcrPreviewFrameResult[]
 }
 
 function buildSampleTimestamps(durationMs: number): number[] {
@@ -45,9 +63,16 @@ export function ScoreProcessingPage() {
     percent: 0,
     message: '',
   })
+  const [ocrPreview, setOcrPreview] = useState<OcrPreviewState>({
+    status: 'idle',
+    message: '',
+    results: [],
+  })
   const extractorRef = useRef<VideoFrameExtractor | null>(null)
+  const ocrProviderRef = useRef<OcrProvider | null>(null)
   const handlerRef = useRef<ReturnType<typeof createVideoExtractMessageHandler> | null>(null)
   const initializedRef = useRef(false)
+  const ocrInitializedRef = useRef(false)
   const currentJobIdRef = useRef<string | null>(null)
 
   const selectedVideo = sourceVideos.find((video) => video.id === selectedVideoId) ?? null
@@ -68,6 +93,14 @@ export function ScoreProcessingPage() {
     return handlerRef.current
   }
 
+  function getOcrProvider(): OcrProvider {
+    if (!ocrProviderRef.current) {
+      ocrProviderRef.current = createDefaultOcrProvider()
+    }
+
+    return ocrProviderRef.current
+  }
+
   async function ensureInitialized(): Promise<void> {
     if (initializedRef.current) {
       return
@@ -86,6 +119,19 @@ export function ScoreProcessingPage() {
     initializedRef.current = true
   }
 
+  async function ensureOcrInitialized(): Promise<void> {
+    if (ocrInitializedRef.current) {
+      return
+    }
+
+    await getOcrProvider().init({
+      origin: window.location.origin,
+      language: 'eng',
+    })
+
+    ocrInitializedRef.current = true
+  }
+
   async function handleStart() {
     if (!selectedVideoId) return
 
@@ -93,6 +139,7 @@ export function ScoreProcessingPage() {
     currentJobIdRef.current = frameBatchId
     setExtractedFrames([])
     setDescriptor(null)
+    setOcrPreview({ status: 'idle', message: '', results: [] })
     setProcessing({ status: 'running', percent: 0, message: 'Loading video metadata…' })
 
     try {
@@ -170,6 +217,7 @@ export function ScoreProcessingPage() {
     setSelectedMimic('red')
     setDescriptor(null)
     setExtractedFrames([])
+    setOcrPreview({ status: 'idle', message: '', results: [] })
     currentJobIdRef.current = null
   }
 
@@ -194,21 +242,68 @@ export function ScoreProcessingPage() {
     setProcessing({ status: 'idle', percent: 0, message: '' })
     setDescriptor(null)
     setExtractedFrames([])
+    setOcrPreview({ status: 'idle', message: '', results: [] })
 
     event.target.value = ''
   }
 
+  async function handleRunOcrPreview() {
+    if (extractedFrames.length === 0) {
+      return
+    }
+
+    setOcrPreview({ status: 'running', message: 'Initializing OCR…', results: [] })
+
+    try {
+      await ensureOcrInitialized()
+
+      const provider = getOcrProvider()
+      const results: OcrPreviewFrameResult[] = []
+
+      for (let index = 0; index < extractedFrames.length; index++) {
+        const frame = extractedFrames[index]
+        const response = await provider.recognize(frame)
+        results.push({
+          timestampMs: frame.timestampMs,
+          lines: response.lines.map((line) => line.text),
+        })
+
+        setOcrPreview({
+          status: 'running',
+          message: `Running OCR preview… ${index + 1}/${extractedFrames.length}`,
+          results: [...results],
+        })
+      }
+
+      setOcrPreview({
+        status: 'complete',
+        message: 'OCR preview finished.',
+        results,
+      })
+    } catch (error) {
+      setOcrPreview({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'OCR preview failed.',
+        results: [],
+      })
+    }
+  }
+
   const isRunning = processing.status === 'running'
+  const isOcrRunning = ocrPreview.status === 'running'
   const isDone = processing.status === 'complete' || processing.status === 'cancelled' || processing.status === 'error'
   const isLocalVideo = selectedVideoId ? Boolean(getRegisteredSourceVideoAsset(selectedVideoId)) : false
+  const nativeOcrAvailable = isNativeTextDetectorAvailable()
+  const hasOcrResults = ocrPreview.results.length > 0
+  const isBusy = isRunning || isOcrRunning
 
   return (
     <section className="page score-processing-page" aria-labelledby="processing-title">
       <h2 id="processing-title">Score Processing</h2>
       <p className="page-lead">
         Upload a local SOULS recording or select an existing event placeholder, then
-        sample real frames from the video. OCR remains stubbed for now; this step is
-        specifically for validating browser-side video extraction.
+        sample real frames from the video. After that, run OCR Preview to extract text
+        from the sampled images using the browser's native text detector when available.
       </p>
 
       <div className="processing-form card">
@@ -222,7 +317,7 @@ export function ScoreProcessingPage() {
             type="file"
             accept="video/*"
             onChange={handleFileSelected}
-            disabled={isRunning}
+            disabled={isBusy}
           />
         </div>
 
@@ -235,7 +330,7 @@ export function ScoreProcessingPage() {
             className="form-control"
             value={selectedVideoId}
             onChange={(e) => setSelectedVideoId(e.target.value)}
-            disabled={isRunning}
+            disabled={isBusy}
           >
             <option value="">— select an event —</option>
             {sourceVideos.map((v) => (
@@ -257,7 +352,7 @@ export function ScoreProcessingPage() {
                   value={colour}
                   checked={selectedMimic === colour}
                   onChange={() => setSelectedMimic(colour)}
-                  disabled={isRunning}
+                  disabled={isBusy}
                   className="visually-hidden"
                 />
                 {colour.charAt(0).toUpperCase() + colour.slice(1)}
@@ -281,6 +376,16 @@ export function ScoreProcessingPage() {
               Cancel
             </button>
           )}
+          {!isRunning && extractedFrames.length > 0 && (
+            <button
+              className="btn btn--ghost"
+              onClick={() => void handleRunOcrPreview()}
+              disabled={isOcrRunning || !nativeOcrAvailable}
+              title={nativeOcrAvailable ? 'Run OCR preview on sampled frames' : 'Native OCR is not available in this browser'}
+            >
+              {isOcrRunning ? 'Running OCR…' : 'Run OCR Preview'}
+            </button>
+          )}
           {isDone && (
             <button className="btn btn--ghost" onClick={handleReset}>
               Reset
@@ -296,6 +401,13 @@ export function ScoreProcessingPage() {
               : 'This selection is still using the scaffolded in-memory extractor because no local file is registered for it.'}
           </p>
         )}
+
+        <p className="integration-note">
+          Native OCR engine: <strong>{nativeOcrAvailable ? 'available' : 'not available'}</strong>.
+          {nativeOcrAvailable
+            ? ' OCR Preview will use the browser TextDetector API on extracted frames.'
+            : ' This browser does not expose TextDetector, so real OCR preview cannot run here yet.'}
+        </p>
       </div>
 
       {processing.status !== 'idle' && (
@@ -310,9 +422,9 @@ export function ScoreProcessingPage() {
 
           {processing.status === 'complete' && (
             <p className="integration-note">
-                  ℹ️ Real frame extraction is now live for uploaded local files. The OCR and
-              row-normalization path is still stubbed, so this preview validates decode,
-              seek, crop, and frame sampling only.
+              ℹ️ Real frame extraction is now live for uploaded local files. OCR Preview can
+              now read those sampled images directly, but the full roster/score worker flow
+              still needs to be rewired to consume these real frames end to end.
             </p>
           )}
         </div>
@@ -364,10 +476,41 @@ export function ScoreProcessingPage() {
         </div>
       )}
 
+      {ocrPreview.status !== 'idle' && (
+        <div className="card" aria-live="polite">
+          <h3>OCR Preview</h3>
+          <p className="page-lead">{ocrPreview.message}</p>
+
+          {ocrPreview.status === 'complete' && ocrPreview.results.length === 0 && (
+            <p className="empty-state">No text was detected in the sampled frames.</p>
+          )}
+
+          {hasOcrResults && (
+            <div className="ocr-results-grid">
+              {ocrPreview.results.map((result) => (
+                <section key={result.timestampMs} className="ocr-result-card">
+                  <h4>{Math.round(result.timestampMs)} ms</h4>
+                  {result.lines.length > 0 ? (
+                    <ul className="ocr-line-list">
+                      {result.lines.map((line, index) => (
+                        <li key={`${result.timestampMs}-${index}`}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="empty-state">No text detected for this frame.</p>
+                  )}
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <p className="integration-note">
         ℹ️ This MVP path calls the existing <code>video-extract.worker</code> contract
-        directly from the page using the browser-backed extractor. Once OCR is wired in,
-        the same source-video registration can feed roster and score workers.
+        directly from the page using the browser-backed extractor. OCR Preview currently
+        runs on the main thread with the native browser text detector; the next step is
+        moving that real OCR path back behind the roster and score worker orchestration.
       </p>
     </section>
   )

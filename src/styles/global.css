@@ -380,6 +380,35 @@ body {
   color: #4e647c;
 }
 
+.ocr-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.ocr-result-card {
+  border: 1px solid #d7e1ed;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  background: #fbfdff;
+}
+
+.ocr-result-card h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+  color: #2a4060;
+}
+
+.ocr-line-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #1c2a39;
+}
+
+.ocr-line-list li + li {
+  margin-top: 0.35rem;
+}
+
 /* ══ Mimic colour picker ══ */
 .mimic-selector {
   display: flex;
