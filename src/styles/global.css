@@ -320,6 +320,66 @@ body {
   padding-top: 0.5rem;
 }
 
+.descriptor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.descriptor-grid dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5e7d97;
+}
+
+.descriptor-grid dd {
+  margin: 0.2rem 0 0;
+  font-weight: 600;
+}
+
+.frame-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.frame-preview-card {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.frame-preview-image,
+.frame-preview-fallback {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  border-radius: 8px;
+  border: 1px solid #d7e1ed;
+  background: #eef4fb;
+}
+
+.frame-preview-image {
+  object-fit: cover;
+}
+
+.frame-preview-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #5e7d97;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 1rem;
+}
+
+.frame-preview-card figcaption {
+  font-size: 0.8rem;
+  color: #4e647c;
+}
+
 /* ══ Mimic colour picker ══ */
 .mimic-selector {
   display: flex;

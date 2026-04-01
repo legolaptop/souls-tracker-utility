@@ -81,7 +81,7 @@ describe('ScoreProcessingPage', () => {
 
   it('start button is disabled when no event is selected', () => {
     renderInShell(<ScoreProcessingPage />)
-    expect(screen.getByRole('button', { name: /start processing/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /sample frames/i })).toBeDisabled()
   })
 })
 

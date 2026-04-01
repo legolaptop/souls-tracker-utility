@@ -1,6 +1,6 @@
 import type { CropRect } from '@/shared/workers/ocrProvider'
 import {
-  createInMemoryVideoFrameExtractor,
+  createDefaultVideoFrameExtractor,
   type ExtractedFrame,
   type VideoFrameExtractor,
 } from '@/shared/workers/videoFrameExtractor'
@@ -43,7 +43,7 @@ export interface VideoExtractWorkerDeps {
 }
 
 const defaultDeps: VideoExtractWorkerDeps = {
-  extractor: createInMemoryVideoFrameExtractor(),
+  extractor: createDefaultVideoFrameExtractor(),
 }
 
 interface WorkerScopeLike {

@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import type { ChangeEvent } from 'react'
+import { useRef, useState } from 'react'
 
-import type { MimicColor } from '@/shared/contracts/types'
-import type { WorkerRequest, WorkerResponse } from '@/shared/contracts/worker'
+import type { ExtractedFrame, VideoFrameExtractor } from '@/shared/workers/videoFrameExtractor'
+import type { MimicColor, SourceVideo } from '@/shared/contracts/types'
 import { MOCK_SOURCE_VIDEOS } from '@/shared/mocks'
+import { registerSourceVideoFile, getRegisteredSourceVideoAsset } from '@/shared/runtime/sourceVideoRegistry'
+import {
+  createVideoExtractMessageHandler,
+  type VideoExtractResponse,
+} from '@/workers/video-extract.worker'
+import { createDefaultVideoFrameExtractor } from '@/shared/workers/videoFrameExtractor'
 
 type ProcessingStatus = 'idle' | 'running' | 'complete' | 'error' | 'cancelled'
 
@@ -12,113 +19,213 @@ interface ProcessingState {
   message: string
 }
 
-/**
- * Placeholder dispatcher that constructs a typed WorkerRequest without actually
- * sending it. The real implementation will post this to a SharedWorker/Worker
- * once the parsing agent delivers the worker bundle.
- */
-function buildWorkerRequest(
-  sourceVideoId: string,
-  mimic: MimicColor,
-  frameBatchId: string,
-): WorkerRequest {
-  return {
-    type: 'PARSE_SCORE_FRAME_BATCH',
-    payload: { sourceVideoId, mimic, frameBatchId },
-  }
+interface VideoDescriptorState {
+  durationMs: number
+  width: number
+  height: number
 }
 
-/**
- * Placeholder that simulates the acknowledgement shape the worker will send back
- * so UI wiring can be tested before the real worker is available.
- */
-function buildMockWorkerResponse(jobId: string, percent: number): WorkerResponse {
-  if (percent >= 100) {
-    return {
-      type: 'PARSE_COMPLETE',
-      payload: { jobId, result: { sourceVideoId: jobId, records: [], issues: [] } },
-    }
+function buildSampleTimestamps(durationMs: number): number[] {
+  if (durationMs <= 0) {
+    return [0]
   }
-  return { type: 'PARSE_PROGRESS', payload: { jobId, percent } }
+
+  const anchors = [0.1, 0.35, 0.6, 0.85]
+  return anchors.map((ratio) => Math.round(durationMs * ratio))
 }
 
 export function ScoreProcessingPage() {
+  const [sourceVideos, setSourceVideos] = useState<SourceVideo[]>(MOCK_SOURCE_VIDEOS)
   const [selectedVideoId, setSelectedVideoId] = useState<string>('')
   const [selectedMimic, setSelectedMimic] = useState<MimicColor>('red')
-  const intervalRef = useRef<number | null>(null)
+  const [descriptor, setDescriptor] = useState<VideoDescriptorState | null>(null)
+  const [extractedFrames, setExtractedFrames] = useState<ExtractedFrame[]>([])
   const [processing, setProcessing] = useState<ProcessingState>({
     status: 'idle',
     percent: 0,
     message: '',
   })
+  const extractorRef = useRef<VideoFrameExtractor | null>(null)
+  const handlerRef = useRef<ReturnType<typeof createVideoExtractMessageHandler> | null>(null)
+  const initializedRef = useRef(false)
+  const currentJobIdRef = useRef<string | null>(null)
 
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current !== null) {
-        window.clearInterval(intervalRef.current)
-      }
-    }
-  }, [])
+  const selectedVideo = sourceVideos.find((video) => video.id === selectedVideoId) ?? null
 
-  function clearProgressInterval() {
-    if (intervalRef.current !== null) {
-      window.clearInterval(intervalRef.current)
-      intervalRef.current = null
+  function getExtractor(): VideoFrameExtractor {
+    if (!extractorRef.current) {
+      extractorRef.current = createDefaultVideoFrameExtractor()
     }
+
+    return extractorRef.current
   }
 
-  function handleStart() {
+  function getHandler() {
+    if (!handlerRef.current) {
+      handlerRef.current = createVideoExtractMessageHandler({ extractor: getExtractor() })
+    }
+
+    return handlerRef.current
+  }
+
+  async function ensureInitialized(): Promise<void> {
+    if (initializedRef.current) {
+      return
+    }
+
+    const responses: VideoExtractResponse[] = []
+    await getHandler()({ type: 'INIT_VIDEO_EXTRACTOR' }, (response) => {
+      responses.push(response)
+    })
+
+    const error = responses.find((response) => response.type === 'VIDEO_EXTRACT_ERROR')
+    if (error?.type === 'VIDEO_EXTRACT_ERROR') {
+      throw new Error(error.payload.message)
+    }
+
+    initializedRef.current = true
+  }
+
+  async function handleStart() {
     if (!selectedVideoId) return
 
-    clearProgressInterval()
+    const frameBatchId = `frames-${Date.now()}`
+    currentJobIdRef.current = frameBatchId
+    setExtractedFrames([])
+    setDescriptor(null)
+    setProcessing({ status: 'running', percent: 0, message: 'Loading video metadata…' })
 
-    const frameBatchId = `batch-${Date.now()}`
-    const request = buildWorkerRequest(selectedVideoId, selectedMimic, frameBatchId)
+    try {
+      await ensureInitialized()
 
-    // Placeholder: log the typed request that will be posted to the worker.
-    console.info('[ScoreProcessing] Worker request (placeholder):', request)
+      const extractor = getExtractor()
+      const metadata = await extractor.getVideoDescriptor(selectedVideoId)
+      setDescriptor({
+        durationMs: metadata.durationMs,
+        width: metadata.width,
+        height: metadata.height,
+      })
 
-    setProcessing({ status: 'running', percent: 0, message: 'Initializing…' })
+      const timestampsMs = buildSampleTimestamps(metadata.durationMs)
 
-    // Simulate progress ticks until the real worker is wired in.
-    let tick = 0
-    intervalRef.current = window.setInterval(() => {
-      tick += 20
-      const response = buildMockWorkerResponse(frameBatchId, tick)
+      await getHandler()(
+        {
+          type: 'EXTRACT_FRAME_BATCH',
+          payload: { sourceVideoId: selectedVideoId, jobId: frameBatchId, timestampsMs },
+        },
+        (response) => {
+          if (response.type === 'FRAME_BATCH_PROGRESS') {
+            setProcessing({
+              status: 'running',
+              percent: response.payload.percent,
+              message: `Extracting sampled frames… ${response.payload.percent}%`,
+            })
+            return
+          }
 
-      if (response.type === 'PARSE_COMPLETE') {
-        clearProgressInterval()
-        setProcessing({ status: 'complete', percent: 100, message: 'Processing complete.' })
-      } else if (response.type === 'PARSE_PROGRESS') {
-        setProcessing({ status: 'running', percent: response.payload.percent, message: `Processing… ${response.payload.percent}%` })
-      }
-    }, 400)
+          if (response.type === 'FRAME_BATCH_COMPLETE') {
+            setExtractedFrames(response.payload.frames)
+            setProcessing({
+              status: 'complete',
+              percent: 100,
+              message: `Extracted ${response.payload.frames.length} sampled frame(s).`,
+            })
+            currentJobIdRef.current = null
+            return
+          }
+
+          if (response.type === 'VIDEO_EXTRACT_ERROR') {
+            setProcessing({
+              status: response.payload.message === 'Job cancelled' ? 'cancelled' : 'error',
+              percent: 0,
+              message: response.payload.message,
+            })
+            currentJobIdRef.current = null
+          }
+        },
+      )
+    } catch (error) {
+      setProcessing({
+        status: 'error',
+        percent: 0,
+        message: error instanceof Error ? error.message : 'Video extraction failed.',
+      })
+      currentJobIdRef.current = null
+    }
   }
 
   function handleCancel() {
-    clearProgressInterval()
-    setProcessing({ status: 'cancelled', percent: 0, message: 'Cancelled by user.' })
+    const jobId = currentJobIdRef.current
+    if (!jobId) {
+      setProcessing({ status: 'cancelled', percent: 0, message: 'Cancelled by user.' })
+      return
+    }
+
+    void getHandler()({ type: 'CANCEL_JOB', payload: { jobId } }, () => undefined)
   }
 
   function handleReset() {
-    clearProgressInterval()
     setProcessing({ status: 'idle', percent: 0, message: '' })
     setSelectedVideoId('')
     setSelectedMimic('red')
+    setDescriptor(null)
+    setExtractedFrames([])
+    currentJobIdRef.current = null
+  }
+
+  function handleFileSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    const sourceVideoId = `local-video-${Date.now()}`
+    registerSourceVideoFile(sourceVideoId, file)
+
+    const nextVideo: SourceVideo = {
+      id: sourceVideoId,
+      label: file.name,
+      capturedDateIso: new Date().toISOString(),
+      notes: 'Local upload for frame extraction MVP',
+    }
+
+    setSourceVideos((current) => [nextVideo, ...current.filter((video) => video.id !== sourceVideoId)])
+    setSelectedVideoId(sourceVideoId)
+    setProcessing({ status: 'idle', percent: 0, message: '' })
+    setDescriptor(null)
+    setExtractedFrames([])
+
+    event.target.value = ''
   }
 
   const isRunning = processing.status === 'running'
   const isDone = processing.status === 'complete' || processing.status === 'cancelled' || processing.status === 'error'
+  const isLocalVideo = selectedVideoId ? Boolean(getRegisteredSourceVideoAsset(selectedVideoId)) : false
 
   return (
     <section className="page score-processing-page" aria-labelledby="processing-title">
       <h2 id="processing-title">Score Processing</h2>
       <p className="page-lead">
-        Select a registered event and mimic colour, then start processing to extract
-        score records from the source video frames.
+        Upload a local SOULS recording or select an existing event placeholder, then
+        sample real frames from the video. OCR remains stubbed for now; this step is
+        specifically for validating browser-side video extraction.
       </p>
 
       <div className="processing-form card">
+        <div className="form-row">
+          <label htmlFor="video-upload" className="form-label">
+            Local Video
+          </label>
+          <input
+            id="video-upload"
+            className="form-control"
+            type="file"
+            accept="video/*"
+            onChange={handleFileSelected}
+            disabled={isRunning}
+          />
+        </div>
+
         <div className="form-row">
           <label htmlFor="video-select" className="form-label">
             Source Event
@@ -131,7 +238,7 @@ export function ScoreProcessingPage() {
             disabled={isRunning}
           >
             <option value="">— select an event —</option>
-            {MOCK_SOURCE_VIDEOS.map((v) => (
+            {sourceVideos.map((v) => (
               <option key={v.id} value={v.id}>
                 {v.label}
               </option>
@@ -163,10 +270,10 @@ export function ScoreProcessingPage() {
           {!isRunning && !isDone && (
             <button
               className="btn btn--primary"
-              onClick={handleStart}
+              onClick={() => void handleStart()}
               disabled={!selectedVideoId}
             >
-              Start Processing
+              Sample Frames
             </button>
           )}
           {isRunning && (
@@ -180,6 +287,15 @@ export function ScoreProcessingPage() {
             </button>
           )}
         </div>
+
+        {selectedVideo && (
+          <p className="integration-note">
+            Selected source: <strong>{selectedVideo.label}</strong>.{' '}
+            {isLocalVideo
+              ? 'This run will use real browser video decoding against the uploaded file.'
+              : 'This selection is still using the scaffolded in-memory extractor because no local file is registered for it.'}
+          </p>
+        )}
       </div>
 
       {processing.status !== 'idle' && (
@@ -194,18 +310,64 @@ export function ScoreProcessingPage() {
 
           {processing.status === 'complete' && (
             <p className="integration-note">
-              ℹ️ Integration point: parsed <code>IngestResult</code> records will be
-              written via <code>writeAppStorage</code> and navigated to{' '}
-              <strong>Review</strong>.
+                  ℹ️ Real frame extraction is now live for uploaded local files. The OCR and
+              row-normalization path is still stubbed, so this preview validates decode,
+              seek, crop, and frame sampling only.
             </p>
           )}
         </div>
       )}
 
+      {descriptor && (
+        <div className="card">
+          <h3>Video Descriptor</h3>
+          <dl className="descriptor-grid">
+            <div>
+              <dt>Duration</dt>
+              <dd>{(descriptor.durationMs / 1000).toFixed(2)}s</dd>
+            </div>
+            <div>
+              <dt>Resolution</dt>
+              <dd>
+                {descriptor.width} x {descriptor.height}
+              </dd>
+            </div>
+            <div>
+              <dt>Mimic Context</dt>
+              <dd>{selectedMimic}</dd>
+            </div>
+          </dl>
+        </div>
+      )}
+
+      {extractedFrames.length > 0 && (
+        <div className="card">
+          <h3>Sampled Frames</h3>
+          <div className="frame-preview-grid">
+            {extractedFrames.map((frame) => (
+              <figure key={`${frame.sourceVideoId}-${frame.timestampMs}`} className="frame-preview-card">
+                {frame.previewDataUrl ? (
+                  <img
+                    className="frame-preview-image"
+                    src={frame.previewDataUrl}
+                    alt={`Frame preview at ${Math.round(frame.timestampMs)} milliseconds`}
+                  />
+                ) : (
+                  <div className="frame-preview-fallback">No browser preview available</div>
+                )}
+                <figcaption>
+                  {Math.round(frame.timestampMs)} ms • {frame.width} x {frame.height}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </div>
+      )}
+
       <p className="integration-note">
-        ℹ️ Worker integration point: <code>WorkerRequest / WorkerResponse</code> from{' '}
-        <code>@/shared/contracts/worker</code>. Real worker bundle delivered by parsing
-        agent.
+        ℹ️ This MVP path calls the existing <code>video-extract.worker</code> contract
+        directly from the page using the browser-backed extractor. Once OCR is wired in,
+        the same source-video registration can feed roster and score workers.
       </p>
     </section>
   )
