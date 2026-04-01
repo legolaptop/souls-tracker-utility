@@ -55,7 +55,10 @@ export async function runRosterBatchOcr(
     const ocr = await deps.ocr.recognize(frame)
 
     for (const line of ocr.lines) {
-      const cleanRaw = line.text.replace(/^\d+\s+/, '').replace(/\s+\d+[KMB]$/i, '').trim()
+      const cleanRaw = line.text
+        .replace(/^\d+\s+/, '')
+        .replace(/\s+[\d.,]+(?:[KMB])?$/i, '')
+        .trim()
       if (!cleanRaw) continue
 
       rawCandidates.push({
