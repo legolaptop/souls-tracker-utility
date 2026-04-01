@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "verify:dist": "node scripts/verify-dist.mjs"
   },
   "dependencies": {
     "react": "^19.2.4",
