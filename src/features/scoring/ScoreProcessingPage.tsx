@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { MimicColor } from '@/shared/contracts/types'
 import type { WorkerRequest, WorkerResponse } from '@/shared/contracts/worker'
@@ -45,14 +45,32 @@ function buildMockWorkerResponse(jobId: string, percent: number): WorkerResponse
 export function ScoreProcessingPage() {
   const [selectedVideoId, setSelectedVideoId] = useState<string>('')
   const [selectedMimic, setSelectedMimic] = useState<MimicColor>('red')
+  const intervalRef = useRef<number | null>(null)
   const [processing, setProcessing] = useState<ProcessingState>({
     status: 'idle',
     percent: 0,
     message: '',
   })
 
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current !== null) {
+        window.clearInterval(intervalRef.current)
+      }
+    }
+  }, [])
+
+  function clearProgressInterval() {
+    if (intervalRef.current !== null) {
+      window.clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+  }
+
   function handleStart() {
     if (!selectedVideoId) return
+
+    clearProgressInterval()
 
     const frameBatchId = `batch-${Date.now()}`
     const request = buildWorkerRequest(selectedVideoId, selectedMimic, frameBatchId)
@@ -64,12 +82,12 @@ export function ScoreProcessingPage() {
 
     // Simulate progress ticks until the real worker is wired in.
     let tick = 0
-    const interval = window.setInterval(() => {
+    intervalRef.current = window.setInterval(() => {
       tick += 20
       const response = buildMockWorkerResponse(frameBatchId, tick)
 
       if (response.type === 'PARSE_COMPLETE') {
-        window.clearInterval(interval)
+        clearProgressInterval()
         setProcessing({ status: 'complete', percent: 100, message: 'Processing complete.' })
       } else if (response.type === 'PARSE_PROGRESS') {
         setProcessing({ status: 'running', percent: response.payload.percent, message: `Processing… ${response.payload.percent}%` })
@@ -78,10 +96,12 @@ export function ScoreProcessingPage() {
   }
 
   function handleCancel() {
+    clearProgressInterval()
     setProcessing({ status: 'cancelled', percent: 0, message: 'Cancelled by user.' })
   }
 
   function handleReset() {
+    clearProgressInterval()
     setProcessing({ status: 'idle', percent: 0, message: '' })
     setSelectedVideoId('')
     setSelectedMimic('red')
