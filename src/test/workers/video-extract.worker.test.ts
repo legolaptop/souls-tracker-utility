@@ -101,4 +101,89 @@ describe('video-extract worker handler', () => {
       payload: { jobId: 'job-err', message: 'frame unavailable' },
     })
   })
+
+  it('returns cancellation error for queued cancelled jobs', async () => {
+    const extractor: VideoFrameExtractor = {
+      async init() {
+        return
+      },
+      async getVideoDescriptor(sourceVideoId) {
+        return { sourceVideoId, durationMs: 10_000, width: 1920, height: 1080 }
+      },
+      async extractFrame(sourceVideoId, timestampMs, crop) {
+        return {
+          sourceVideoId,
+          timestampMs,
+          width: 1920,
+          height: 1080,
+          crop,
+          syntheticText: [`frame-${timestampMs}`],
+        }
+      },
+    }
+
+    const handler = createVideoExtractMessageHandler({ extractor })
+    const responses: VideoExtractResponse[] = []
+
+    await handler({ type: 'CANCEL_JOB', payload: { jobId: 'job-cancel' } }, (message) => responses.push(message))
+    await handler(
+      {
+        type: 'EXTRACT_FRAME_BATCH',
+        payload: { sourceVideoId: 'vid-1', jobId: 'job-cancel', timestampsMs: [0, 1000] },
+      },
+      (message) => responses.push(message),
+    )
+
+    expect(responses).toEqual([
+      {
+        type: 'VIDEO_EXTRACT_ERROR',
+        payload: { jobId: 'job-cancel', message: 'Job cancelled' },
+      },
+    ])
+  })
+
+  it('returns cancellation error for in-flight cancelled jobs', async () => {
+    const extractor: VideoFrameExtractor = {
+      async init() {
+        return
+      },
+      async getVideoDescriptor(sourceVideoId) {
+        return { sourceVideoId, durationMs: 10_000, width: 1920, height: 1080 }
+      },
+      async extractFrame(sourceVideoId, timestampMs, crop) {
+        return {
+          sourceVideoId,
+          timestampMs,
+          width: 1920,
+          height: 1080,
+          crop,
+          syntheticText: [`frame-${timestampMs}`],
+        }
+      },
+    }
+
+    const handler = createVideoExtractMessageHandler({ extractor })
+    const responses: VideoExtractResponse[] = []
+    let cancelled = false
+
+    await handler(
+      {
+        type: 'EXTRACT_FRAME_BATCH',
+        payload: { sourceVideoId: 'vid-1', jobId: 'job-live-cancel', timestampsMs: [0, 1000, 2000] },
+      },
+      (message) => {
+        responses.push(message)
+        if (message.type === 'FRAME_BATCH_PROGRESS' && !cancelled) {
+          cancelled = true
+          void handler({ type: 'CANCEL_JOB', payload: { jobId: 'job-live-cancel' } }, (next) => responses.push(next))
+        }
+      },
+    )
+
+    expect(responses.some((message) => message.type === 'FRAME_BATCH_COMPLETE')).toBe(false)
+    expect(responses.find((message) => message.type === 'VIDEO_EXTRACT_ERROR')).toEqual({
+      type: 'VIDEO_EXTRACT_ERROR',
+      payload: { jobId: 'job-live-cancel', message: 'Job cancelled' },
+    })
+  })
 })

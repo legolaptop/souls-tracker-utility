@@ -57,6 +57,13 @@ interface WorkerScopeLike {
 export function createVideoExtractMessageHandler(deps: VideoExtractWorkerDeps = defaultDeps) {
   const cancelled = new Set<string>()
 
+  function ensureActiveJob(jobId: string): void {
+    if (cancelled.has(jobId)) {
+      cancelled.delete(jobId)
+      throw new Error('Job cancelled')
+    }
+  }
+
   return async function handle(
     request: VideoExtractRequest,
     postMessage: (response: VideoExtractResponse) => void,
@@ -77,10 +84,7 @@ export function createVideoExtractMessageHandler(deps: VideoExtractWorkerDeps = 
       const frames: ExtractedFrame[] = []
 
       for (let index = 0; index < timestampsMs.length; index++) {
-        if (cancelled.has(jobId)) {
-          cancelled.delete(jobId)
-          break
-        }
+        ensureActiveJob(jobId)
 
         const frame = await deps.extractor.extractFrame(sourceVideoId, timestampsMs[index], crop)
         frames.push(frame)
@@ -89,6 +93,8 @@ export function createVideoExtractMessageHandler(deps: VideoExtractWorkerDeps = 
           payload: { jobId, percent: Math.round(((index + 1) / timestampsMs.length) * 100) },
         })
       }
+
+      ensureActiveJob(jobId)
 
       postMessage({
         type: 'FRAME_BATCH_COMPLETE',

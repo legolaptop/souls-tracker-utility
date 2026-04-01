@@ -145,6 +145,16 @@ export function createOcrWorkerMessageHandler(deps: OcrWorkerDeps = defaultDeps)
 
     try {
       if (request.type === 'INIT_WORKER') {
+        if (request.payload.contractVersion !== workerContractVersion) {
+          postMessage({
+            type: 'WORKER_ERROR',
+            payload: {
+              message: `Unsupported contract version: ${request.payload.contractVersion}`,
+            },
+          })
+          return
+        }
+
         await deps.extractor.init()
         await deps.ocr.init({
           origin: deps.origin,
@@ -197,6 +207,7 @@ export function createOcrWorkerMessageHandler(deps: OcrWorkerDeps = defaultDeps)
       }
 
       const scorePayload = await runScoreJob(request)
+      ensureActiveJob(scorePayload.jobId)
       postMessage({ type: 'PARSE_COMPLETE', payload: scorePayload })
     } catch (error) {
       const jobId = request.type === 'INIT_WORKER' ? undefined : getJobId(request)
